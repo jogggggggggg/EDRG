@@ -1,0 +1,195 @@
+{
+  "Construction fermes": [
+    [
+      "Taille",
+      "Caractéristiques",
+      "Temps indicatif",
+      "Prix de base",
+      "Options"
+    ],
+    [
+      "Petite",
+      "1 module, compacte, stockage de base, accès maintenance",
+      "1–2 h",
+      "1 500 $",
+      "Camouflage; décoration; optimisation"
+    ],
+    [
+      "Moyenne",
+      "2–4 modules, production régulière, stockage amélioré",
+      "3–5 h",
+      "5 000 $",
+      "Camouflage complet; tri; décoration; optimisation"
+    ],
+    [
+      "Grande",
+      "5–10 modules, forte production, gros stockage",
+      "8–12 h",
+      "15 000 $",
+      "Camouflage complet; bâtiment; tri; optimisation"
+    ],
+    [
+      "Gigantesque",
+      "Projet industriel, nombreux modules, stockage massif, architecture personnalisée",
+      "20–30 h+",
+      "40 000 $",
+      "Camouflage premium; paysage; tri avancé; optimisation"
+    ],
+    [
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    [
+      "Option",
+      "Prix",
+      "Description",
+      "",
+      ""
+    ],
+    [
+      "Camouflage léger",
+      "500 $",
+      "Masquage visuel simple",
+      "",
+      ""
+    ],
+    [
+      "Camouflage complet",
+      "1 500 $",
+      "Relief, végétation et façades",
+      "",
+      ""
+    ],
+    [
+      "Camouflage premium",
+      "10 000 $",
+      "Intégration poussée au terrain + accès discret",
+      "",
+      ""
+    ],
+    [
+      "Décoration",
+      "1 000 $",
+      "Habillage esthétique",
+      "",
+      ""
+    ],
+    [
+      "Tri automatique",
+      "2 500 $",
+      "Tri et stockage structuré",
+      "",
+      ""
+    ],
+    [
+      "Optimisation",
+      "2 000 $",
+      "Optimisation du débit selon le design",
+      "",
+      ""
+    ]
+  ],
+  "Transports & services": [
+    [
+      "Service",
+      "Unité",
+      "Prix de base",
+      "Inclus",
+      "Supplément"
+    ],
+    [
+      "Transport de pins — petit",
+      "trajet",
+      "500 $",
+      "0–500 blocs",
+      "1 $ / bloc au-delà"
+    ],
+    [
+      "Transport de pins — moyen",
+      "trajet",
+      "1 500 $",
+      "0–1 500 blocs",
+      "0,75 $ / bloc au-delà"
+    ],
+    [
+      "Transport de pins — grand",
+      "trajet",
+      "4 000 $",
+      "0–3 000 blocs",
+      "0,60 $ / bloc au-delà"
+    ],
+    [
+      "Transport de pins — industriel",
+      "mission",
+      "10 000 $",
+      "0–6 000 blocs",
+      "Sur devis"
+    ],
+    [
+      "Livraison express",
+      "multiplicateur",
+      "×1,5",
+      "Prioritaire",
+      "Ajout au transport"
+    ],
+    [
+      "Chargement / déchargement",
+      "opération",
+      "300 $",
+      "1 opération",
+      "Sur devis si complexe"
+    ],
+    [
+      "Stockage temporaire",
+      "jour",
+      "500 $",
+      "Zone dédiée",
+      "Sur devis gros volume"
+    ]
+  ],
+  "Politique de rareté": [
+    [
+      "Niveau",
+      "Signification",
+      "Principe"
+    ],
+    [
+      "⭐",
+      "Très commun",
+      "Disponibilité élevée"
+    ],
+    [
+      "⭐⭐",
+      "Commun",
+      "Farm simple"
+    ],
+    [
+      "⭐⭐⭐",
+      "Peu commun",
+      "Prime d'exploration / transformation"
+    ],
+    [
+      "⭐⭐⭐⭐",
+      "Rare",
+      "Difficulté + danger + distance"
+    ],
+    [
+      "⭐⭐⭐⭐⭐",
+      "Ultra-rare",
+      "Disponibilité et prestige"
+    ],
+    [
+      "👑",
+      "Unique / trophée",
+      "Hors grille ou inestimable"
+    ],
+    [
+      "Règle",
+      "Prix au stack",
+      "Pas forcément 64 × prix unitaire pour les objets de prestige"
+    ]
+  ]
+}
