@@ -163,11 +163,9 @@ type ServiceCatalog = { farmTiers: ServiceTier[]; farmOptions: ServiceOption[]; 
 type SortMode = 'defaut' | 'prix-asc' | 'prix-desc' | 'nom'
 type AdminTab = 'catalogue' | 'services' | 'promos' | 'commandes'
 
-// Mot de passe admin unique — pas d'identifiant, pas de création de compte.
-// Rappel : ce site est 100% statique (pas de serveur), donc ce mot de passe
-// vit dans le code envoyé au navigateur. Il décourage les visiteurs curieux,
-// mais n'importe qui inspectant le code source de la page peut le retrouver.
-const ADMIN_PASSWORD = 'zKsz-jEDN-KMvB-zUlr-QSWH-3zY8-VrrS'
+// Le mot de passe admin unique est vérifié côté serveur (route /api/admin/login,
+// variable d'environnement ADMIN_PASSWORD) — il n'apparaît jamais dans le code
+// envoyé au navigateur des visiteurs.
 
 const DEFAULT_SERVICES: ServiceCatalog = {
   farmTiers: [
@@ -196,14 +194,6 @@ const DEFAULT_SERVICES: ServiceCatalog = {
   ],
 }
 
-function loadJSON<T>(key: string, fallback: T): T {
-  if (typeof window === 'undefined') return fallback
-  try { const raw = localStorage.getItem(key); return raw ? (JSON.parse(raw) as T) : fallback } catch { return fallback }
-}
-function saveJSON(key: string, value: unknown) {
-  try { localStorage.setItem(key, JSON.stringify(value)) } catch { /* stockage indisponible, on ignore */ }
-}
-
 export default function Page() {
   const [items, setItems] = useState<Item[]>(fallbackItems)
   const [cart, setCart] = useState<CartLine[]>([])
@@ -221,25 +211,51 @@ export default function Page() {
   const [adminTab, setAdminTab] = useState<AdminTab>('catalogue')
   const [notice, setNotice] = useState('')
   const [newPromo, setNewPromo] = useState({ title: '', detail: '' })
-  const [adminAuth, setAdminAuth] = useState(false)
+  const [adminPassword, setAdminPassword] = useState<string | null>(null)
   const [authOpen, setAuthOpen] = useState(false)
+  const [authError, setAuthError] = useState('')
+  const adminAuth = adminPassword !== null
 
   useEffect(() => { fetch('/data/catalogue.json').then(r => r.json()).then(data => Array.isArray(data) && setItems(data)).catch(() => {}) }, [])
-  useEffect(() => { if (sessionStorage.getItem('tfpc-admin-session') === 'true') setAdminAuth(true) }, [])
-  useEffect(() => { setServices(loadJSON('tfpc-services', DEFAULT_SERVICES)) }, [])
-  useEffect(() => { setOrders(loadJSON('tfpc-orders', [] as OrderRecord[])) }, [])
-  useEffect(() => { saveJSON('tfpc-services', services) }, [services])
+  useEffect(() => { const saved = sessionStorage.getItem('tfpc-admin-pw'); if (saved) setAdminPassword(saved) }, [])
 
-  const openAdmin = () => setAuthOpen(true)
-  const handleAdminAuth = (event: React.FormEvent<HTMLFormElement>) => {
+  // Les prix des services viennent des constantes par défaut, écrasées par les
+  // surcharges enregistrées en base (modifiées depuis l'admin). Visible par tout le monde.
+  useEffect(() => {
+    fetch('/api/services').then(r => r.json()).then(data => {
+      const overrides = (data && data.overrides) || {}
+      if (Object.keys(overrides).length === 0) return
+      setServices(current => ({
+        farmTiers: current.farmTiers.map(t => ({ ...t, price: overrides[t.id] ?? t.price })),
+        farmOptions: current.farmOptions.map(o => ({ ...o, price: overrides[o.id] ?? o.price })),
+        transportTiers: current.transportTiers.map(t => ({ ...t, price: overrides[t.id] ?? t.price })),
+        transportOptions: current.transportOptions.map(o => ({ ...o, price: overrides[o.id] ?? o.price })),
+      }))
+    }).catch(() => {})
+  }, [])
+
+  const openAdmin = () => { setAuthError(''); setAuthOpen(true) }
+  const handleAdminAuth = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
     const password = String(form.get('password') || '')
-    if (password !== ADMIN_PASSWORD) { setNotice('Mot de passe incorrect.'); return }
-    sessionStorage.setItem('tfpc-admin-session', 'true')
-    setAdminAuth(true); setAuthOpen(false); setView('admin')
+    try {
+      const res = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) })
+      if (!res.ok) { setAuthError('Mot de passe incorrect.'); return }
+    } catch { setAuthError('Connexion au serveur impossible. Réessaie.'); return }
+    sessionStorage.setItem('tfpc-admin-pw', password)
+    setAdminPassword(password); setAuthOpen(false); setView('admin')
   }
-  const logoutAdmin = () => { sessionStorage.removeItem('tfpc-admin-session'); setAdminAuth(false); setView('home') }
+  const logoutAdmin = () => { sessionStorage.removeItem('tfpc-admin-pw'); setAdminPassword(null); setView('home') }
+
+  // Charge les commandes depuis la base dès que l'admin est connecté.
+  useEffect(() => {
+    if (!adminPassword) return
+    fetch('/api/orders', { headers: { 'x-admin-password': adminPassword } })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(data => setOrders(data.orders || []))
+      .catch(() => setNotice("Impossible de charger les commandes depuis la base."))
+  }, [adminPassword])
 
   const priceBase = (item: Item) => Number(item['Prix / stack de 64 ($)']) || (Number(item['Prix / unité ($)']) || 0) * 64
   const filtered = useMemo(() => {
@@ -296,29 +312,36 @@ export default function Page() {
   }
   const removeCustomRequest = (id: number) => setCustomRequests(current => current.filter(request => request.id !== id))
 
-  const submitOrder = (event: React.FormEvent<HTMLFormElement>) => {
+  const submitOrder = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
     const player = String(form.get('player') || '')
     const contact = String(form.get('contact') || '')
     const note = String(form.get('note') || '')
-    const order: OrderRecord = {
-      id: Date.now(),
-      date: new Date().toLocaleString('fr-FR'),
+    const payload = {
       player, contact, note,
       items: cart.map(line => ({ label: line.item.Objet, detail: `${line.quantity} ${line.mode === 'unit' ? 'unité(s)' : 'stack(s)'}`, total: lineUnitPrice(line.item, line.mode) * line.quantity })),
       services: serviceCart.map(line => ({ label: line.label, detail: `${line.quantity} ×`, total: line.price * line.quantity })),
       customRequests: customRequests.map(request => request.text),
       total,
     }
-    const nextOrders = [order, ...orders]
-    setOrders(nextOrders)
-    saveJSON('tfpc-orders', nextOrders)
-    setCart([]); setServiceCart([]); setCustomRequests([])
-    setCheckoutOpen(false); setCartOpen(false)
-    setNotice('Commande enregistrée. Nous revenons vers toi pour le paiement et la livraison.')
+    try {
+      const res = await fetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      if (!res.ok) throw new Error('failed')
+      setCart([]); setServiceCart([]); setCustomRequests([])
+      setCheckoutOpen(false); setCartOpen(false)
+      setNotice('Commande enregistrée. Nous revenons vers toi pour le paiement et la livraison.')
+    } catch {
+      setNotice("La commande n'a pas pu être envoyée — vérifie ta connexion et réessaie.")
+    }
   }
-  const deleteOrder = (id: number) => { const next = orders.filter(order => order.id !== id); setOrders(next); saveJSON('tfpc-orders', next) }
+  const deleteOrder = async (id: number) => {
+    if (!adminPassword) return
+    setOrders(current => current.filter(order => order.id !== id))
+    try {
+      await fetch(`/api/orders/${id}`, { method: 'DELETE', headers: { 'x-admin-password': adminPassword } })
+    } catch { setNotice("La suppression n'a pas été enregistrée côté serveur.") }
+  }
 
   const cartCount = cart.reduce((sum, line) => sum + line.quantity, 0) + serviceCart.reduce((sum, line) => sum + line.quantity, 0) + customRequests.length
   const catalogueItemsToShow = view === 'home' ? filtered.slice(0, 6) : filtered
@@ -345,6 +368,7 @@ export default function Page() {
       newPromo={newPromo} setNewPromo={setNewPromo}
       onBack={() => setView('home')}
       onLogout={logoutAdmin}
+      adminPassword={adminPassword || ''}
     /> : <>
       {view === 'home' && <>
         <section className="hero">
@@ -477,13 +501,14 @@ export default function Page() {
       <button type="button" className="modal-close" onClick={() => setAuthOpen(false)}>×</button>
       <span className="eyebrow">Accès réservé</span><h2>Connexion admin</h2>
       <p>Entre le mot de passe administrateur pour gérer la boutique.</p>
+      {authError && <p className="auth-error">{authError}</p>}
       <label>Mot de passe<input required type="password" name="password" autoComplete="current-password" /></label>
       <button className="primary full">Se connecter</button>
     </form></div>}
   </div>
 }
 
-function Admin({ items, setItems, promos, setPromos, services, setServices, orders, deleteOrder, tab, setTab, newPromo, setNewPromo, onBack, onLogout }: {
+function Admin({ items, setItems, promos, setPromos, services, setServices, orders, deleteOrder, tab, setTab, newPromo, setNewPromo, onBack, onLogout, adminPassword }: {
   items: Item[]; setItems: React.Dispatch<React.SetStateAction<Item[]>>
   promos: Promo[]; setPromos: React.Dispatch<React.SetStateAction<Promo[]>>
   services: ServiceCatalog; setServices: React.Dispatch<React.SetStateAction<ServiceCatalog>>
@@ -491,13 +516,23 @@ function Admin({ items, setItems, promos, setPromos, services, setServices, orde
   tab: AdminTab; setTab: (tab: AdminTab) => void
   newPromo: { title: string; detail: string }; setNewPromo: React.Dispatch<React.SetStateAction<{ title: string; detail: string }>>
   onBack: () => void; onLogout: () => void
+  adminPassword: string
 }) {
   const [editing, setEditing] = useState<Item | null>(null)
   const [adminSearch, setAdminSearch] = useState('')
+  const [savingPrice, setSavingPrice] = useState<string | null>(null)
   const filteredAdminItems = useMemo(() => items.filter(item => `${item.Objet} ${item.Catégorie}`.toLowerCase().includes(adminSearch.toLowerCase())), [items, adminSearch])
   const saveItem = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!editing) return; setItems(current => current.some(item => item.Objet === editing.Objet) ? current.map(item => item.Objet === editing.Objet ? editing : item) : [editing, ...current]); setEditing(null) }
-  const updateTierPrice = (group: 'farmTiers' | 'transportTiers', id: string, price: number) => setServices(current => ({ ...current, [group]: current[group].map(t => t.id === id ? { ...t, price } : t) }))
-  const updateOptionPrice = (group: 'farmOptions' | 'transportOptions', id: string, price: number) => setServices(current => ({ ...current, [group]: current[group].map(o => o.id === id ? { ...o, price } : o) }))
+  const persistPrice = async (id: string, price: number) => {
+    setSavingPrice(id)
+    try {
+      await fetch('/api/services', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-admin-password': adminPassword }, body: JSON.stringify({ updates: { [id]: price } }) })
+    } finally {
+      setSavingPrice(null)
+    }
+  }
+  const updateTierPrice = (group: 'farmTiers' | 'transportTiers', id: string, price: number) => { setServices(current => ({ ...current, [group]: current[group].map(t => t.id === id ? { ...t, price } : t) })); persistPrice(id, price) }
+  const updateOptionPrice = (group: 'farmOptions' | 'transportOptions', id: string, price: number) => { setServices(current => ({ ...current, [group]: current[group].map(o => o.id === id ? { ...o, price } : o) })); persistPrice(id, price) }
 
   return <main className="admin-page">
     <div className="admin-hero">
@@ -520,13 +555,13 @@ function Admin({ items, setItems, promos, setPromos, services, setServices, orde
     {tab === 'services' && <section className="admin-panel">
       <div className="panel-head"><div><h2>Tarifs des services</h2><p>Ces prix sont ceux affichés en direct dans l'onglet Services de la boutique.</p></div></div>
       <h3 className="admin-subhead">Construction de ferme</h3>
-      <div className="admin-list">{services.farmTiers.map(t => <div className="admin-row" key={t.id}><div><b>{t.label}</b><span>{t.desc}</span></div><div className="admin-price"><input type="number" min="0" step="1" value={t.price} onChange={e => updateTierPrice('farmTiers', t.id, Number(e.target.value))} /><span>$</span></div></div>)}</div>
+      <div className="admin-list">{services.farmTiers.map(t => <div className="admin-row" key={t.id}><div><b>{t.label}</b><span>{t.desc}</span></div><div className="admin-price"><input type="number" min="0" step="1" value={t.price} onChange={e => updateTierPrice('farmTiers', t.id, Number(e.target.value))} /><span>{savingPrice === t.id ? '…' : '$'}</span></div></div>)}</div>
       <h3 className="admin-subhead">Options ferme</h3>
-      <div className="admin-list">{services.farmOptions.map(o => <div className="admin-row" key={o.id}><div><b>{o.label}</b><span>{o.desc}</span></div><div className="admin-price"><input type="number" min="0" step="1" value={o.price} onChange={e => updateOptionPrice('farmOptions', o.id, Number(e.target.value))} /><span>$</span></div></div>)}</div>
+      <div className="admin-list">{services.farmOptions.map(o => <div className="admin-row" key={o.id}><div><b>{o.label}</b><span>{o.desc}</span></div><div className="admin-price"><input type="number" min="0" step="1" value={o.price} onChange={e => updateOptionPrice('farmOptions', o.id, Number(e.target.value))} /><span>{savingPrice === o.id ? '…' : '$'}</span></div></div>)}</div>
       <h3 className="admin-subhead">Transport</h3>
-      <div className="admin-list">{services.transportTiers.map(t => <div className="admin-row" key={t.id}><div><b>{t.label}</b><span>{t.desc}</span></div><div className="admin-price"><input type="number" min="0" step="1" value={t.price} onChange={e => updateTierPrice('transportTiers', t.id, Number(e.target.value))} /><span>$</span></div></div>)}</div>
+      <div className="admin-list">{services.transportTiers.map(t => <div className="admin-row" key={t.id}><div><b>{t.label}</b><span>{t.desc}</span></div><div className="admin-price"><input type="number" min="0" step="1" value={t.price} onChange={e => updateTierPrice('transportTiers', t.id, Number(e.target.value))} /><span>{savingPrice === t.id ? '…' : '$'}</span></div></div>)}</div>
       <h3 className="admin-subhead">Options transport</h3>
-      <div className="admin-list">{services.transportOptions.map(o => <div className="admin-row" key={o.id}><div><b>{o.label}</b><span>{o.desc}</span></div><div className="admin-price"><input type="number" min="0" step="1" value={o.price} onChange={e => updateOptionPrice('transportOptions', o.id, Number(e.target.value))} /><span>$</span></div></div>)}</div>
+      <div className="admin-list">{services.transportOptions.map(o => <div className="admin-row" key={o.id}><div><b>{o.label}</b><span>{o.desc}</span></div><div className="admin-price"><input type="number" min="0" step="1" value={o.price} onChange={e => updateOptionPrice('transportOptions', o.id, Number(e.target.value))} /><span>{savingPrice === o.id ? '…' : '$'}</span></div></div>)}</div>
     </section>}
 
     {tab === 'promos' && <section className="admin-panel">
