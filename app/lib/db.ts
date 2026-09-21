@@ -30,13 +30,15 @@ export async function ensureTables(): Promise<void> {
       await sql`CREATE TABLE IF NOT EXISTS catalog_items (
         id TEXT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`
-      const countRows = await sql`SELECT COUNT(*)::int AS count FROM catalog_items`
-      if (Number(countRows[0]?.count || 0) === 0) {
-        for (const raw of catalogueSeed as Record<string, unknown>[]) {
-          const name = String(raw['Objet'] || '').trim()
-          if (!name) continue
-          await sql`INSERT INTO catalog_items (id, data) VALUES (${name}, ${JSON.stringify(raw)}) ON CONFLICT (id) DO NOTHING`
-        }
+      // Ajoute aussi les nouveaux objets du fichier catalogue si la base existe déjà.
+      // Les entrées existantes ne sont jamais écrasées : leurs prix personnalisés restent intacts.
+      for (const raw of catalogueSeed as Record<string, unknown>[]) {
+        const name = String(raw['Objet'] || '').trim()
+        if (!name) continue
+        const stack = Math.max(0, Number(raw['Prix / stack de 64 ($)']) || 0)
+        const unit = Math.max(0, Number(raw['Prix / unité ($)']) || stack / 64)
+        const data = { ...raw, Objet: name, 'Prix / unité ($)': unit, 'Prix / stack de 64 ($)': stack || unit * 64, Disponibilité: String(raw['Disponibilité'] || 'Disponible') }
+        await sql`INSERT INTO catalog_items (id, data) VALUES (${name}, ${JSON.stringify(data)}) ON CONFLICT (id) DO NOTHING`
       }
     })()
   }

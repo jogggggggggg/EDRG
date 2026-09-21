@@ -19,11 +19,15 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: 'Objet invalide.' }, { status: 400 })
   }
   const name = item.Objet.trim()
+  const stack = Math.max(0, Number(item['Prix / stack de 64 ($)']) || 0)
+  const unit = Math.max(0, Number(item['Prix / unité ($)']) || stack / 64)
   const data = {
     ...item,
     Objet: name,
     Catégorie: typeof item.Catégorie === 'string' && item.Catégorie.trim() ? item.Catégorie.trim() : 'Divers',
-    'Prix / stack de 64 ($)': Math.max(0, Number(item['Prix / stack de 64 ($)']) || 0),
+    'Prix / unité ($)': unit,
+    'Prix / stack de 64 ($)': stack || unit * 64,
+    Disponibilité: typeof item.Disponibilité === 'string' && item.Disponibilité.trim() ? item.Disponibilité.trim() : 'Disponible',
   }
   await ensureTables()
   await sql`INSERT INTO catalog_items (id, data, updated_at) VALUES (${name}, ${JSON.stringify(data)}, now())

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-type Item = { Objet: string; Catégorie: string; 'Prix / stack de 64 ($)'?: number; 'Prix / unité ($)'?: number; 'Rareté estimée'?: string; 'Justification économique'?: string }
+type Item = { Objet: string; Catégorie: string; 'Prix / stack de 64 ($)'?: number; 'Prix / unité ($)'?: number; 'Rareté estimée'?: string; 'Justification économique'?: string; Disponibilité?: string; Image?: string }
 type CartLine = { item: Item; quantity: number; mode: 'unit' | 'stack' }
 type Promo = { id: number; title: string; detail: string; active: boolean; image: string; badge: string }
 
@@ -530,9 +530,22 @@ function Admin({ items, setItems, promos, setPromos, services, setServices, orde
   adminPassword: string
 }) {
   const [editing, setEditing] = useState<Item | null>(null)
+  const [priceDrafts, setPriceDrafts] = useState<Record<string, { unit: string; stack: string }>>({})
   const [adminSearch, setAdminSearch] = useState('')
   const [savingPrice, setSavingPrice] = useState<string | null>(null)
   const filteredAdminItems = useMemo(() => items.filter(item => `${item.Objet} ${item.Catégorie}`.toLowerCase().includes(adminSearch.toLowerCase())), [items, adminSearch])
+  const draftFor = (item: Item) => priceDrafts[item.Objet] || { unit: String(Number(item['Prix / unité ($)']) || (Number(item['Prix / stack de 64 ($)']) || 0) / 64), stack: String(Number(item['Prix / stack de 64 ($)']) || (Number(item['Prix / unité ($)']) || 0) * 64) }
+  const setDraft = (item: Item, field: 'unit' | 'stack', value: string) => setPriceDrafts(current => ({ ...current, [item.Objet]: { ...draftFor(item), [field]: value } }))
+  const saveQuickPrice = async (item: Item) => {
+    const draft = draftFor(item)
+    const unit = Math.max(0, Number(draft.unit) || 0)
+    const stack = Math.max(0, Number(draft.stack) || unit * 64)
+    const res = await fetch('/api/catalogue', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: { ...item, 'Prix / unité ($)': unit, 'Prix / stack de 64 ($)': stack } }) })
+    if (!res.ok) return
+    const data = await res.json()
+    setItems(current => current.map(x => x.Objet === item.Objet ? data.item : x))
+    setPriceDrafts(current => { const next = { ...current }; delete next[item.Objet]; return next })
+  }
   const saveItem = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault(); if (!editing) return
     const res = await fetch('/api/catalogue', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: editing }) })
@@ -566,9 +579,9 @@ function Admin({ items, setItems, promos, setPromos, services, setServices, orde
     </div>
 
     {tab === 'catalogue' && <section className="admin-panel">
-      <div className="panel-head"><div><h2>Catalogue</h2><p>{filteredAdminItems.length} / {items.length} objets affichés</p></div><button className="primary" onClick={() => setEditing({ Objet: '', Catégorie: 'Agriculture', 'Prix / stack de 64 ($)': 0, 'Justification économique': '' })}>Ajouter un objet</button></div>
+      <div className="panel-head"><div><h2>Catalogue</h2><p>{filteredAdminItems.length} / {items.length} objets affichés</p></div><button className="primary" onClick={() => setEditing({ Objet: '', Catégorie: 'Agriculture', 'Prix / unité ($)': 0, 'Prix / stack de 64 ($)': 0, 'Justification économique': '', Disponibilité: 'Disponible' })}>Ajouter un objet</button></div>
       <input className="admin-search" placeholder="Filtrer le catalogue par nom ou catégorie…" value={adminSearch} onChange={e => setAdminSearch(e.target.value)} />
-      <div className="admin-list">{filteredAdminItems.map(item => <div className="admin-row" key={item.Objet}><div><b>{item.Objet}</b><span>{item.Catégorie} · {money(Number(item['Prix / stack de 64 ($)']) || 0)}</span></div><div><button onClick={() => setEditing({ ...item })}>Modifier</button><button className="danger" onClick={async () => { if (!confirm(`Supprimer ${item.Objet} ?`)) return; const res = await fetch('/api/catalogue', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Objet: item.Objet }) }); if (res.ok) setItems(current => current.filter(x => x.Objet !== item.Objet)) }}>Supprimer</button></div></div>)}</div>
+      <div className="admin-list">{filteredAdminItems.map(item => { const draft = draftFor(item); return <div className="admin-row admin-item-row" key={item.Objet}><div className="admin-item-info"><b>{item.Objet}</b><span>{item.Catégorie} · {item.Disponibilité || 'Disponible'}</span></div><div className="admin-item-actions"><label>Unité<input className="admin-price-input" type="number" min="0" step="0.01" value={draft.unit} onChange={e => setDraft(item, 'unit', e.target.value)} /></label><label>Stack 64<input className="admin-price-input" type="number" min="0" step="0.01" value={draft.stack} onChange={e => setDraft(item, 'stack', e.target.value)} /></label><button className="primary" onClick={() => saveQuickPrice(item)}>Enregistrer prix</button><button onClick={() => setEditing({ ...item })}>Modifier</button><button className="danger" onClick={async () => { if (!confirm(`Supprimer ${item.Objet} ?`)) return; const res = await fetch('/api/catalogue', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Objet: item.Objet }) }); if (res.ok) setItems(current => current.filter(x => x.Objet !== item.Objet)) }}>Supprimer</button></div></div> })}</div>
     </section>}
 
     {tab === 'services' && <section className="admin-panel">
@@ -610,7 +623,7 @@ function Admin({ items, setItems, promos, setPromos, services, setServices, orde
       <h2>{editing.Objet ? 'Modifier l\u2019objet' : 'Nouvel objet'}</h2>
       <label>Nom<input required value={editing.Objet} onChange={e => setEditing({ ...editing, Objet: e.target.value })} /></label>
       <label>Catégorie<input value={editing.Catégorie} onChange={e => setEditing({ ...editing, Catégorie: e.target.value })} /></label>
-      <label>Prix par stack<input type="number" min="0" step="0.01" value={editing['Prix / stack de 64 ($)'] || 0} onChange={e => setEditing({ ...editing, 'Prix / stack de 64 ($)': Number(e.target.value) })} /></label>
+      <label>Prix par unité<input type="number" min="0" step="0.01" value={editing['Prix / unité ($)'] || 0} onChange={e => setEditing({ ...editing, 'Prix / unité ($)': Number(e.target.value) })} /></label><label>Prix par stack de 64<input type="number" min="0" step="0.01" value={editing['Prix / stack de 64 ($)'] || 0} onChange={e => setEditing({ ...editing, 'Prix / stack de 64 ($)': Number(e.target.value) })} /></label><label>Disponibilité<input value={editing.Disponibilité || 'Disponible'} onChange={e => setEditing({ ...editing, Disponibilité: e.target.value })} /></label>
       <label>Description<textarea value={editing['Justification économique'] || ''} onChange={e => setEditing({ ...editing, 'Justification économique': e.target.value })} /></label>
       <button className="primary full">Enregistrer</button>
     </form></div>}
