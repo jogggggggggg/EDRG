@@ -59,7 +59,7 @@ export function checkAdminSession(request: Request): boolean {
 
 export function checkAdminCode(code: string | null): boolean {
   const expected = process.env.ADMIN_ACCESS_CODE || process.env.ADMIN_PASSWORD
-  return Boolean(expected && code && code === expected)
+  return Boolean(expected && code && code.trim() === expected.trim())
 }
 
 export async function getServicePrices() {
