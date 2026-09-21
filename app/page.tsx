@@ -158,13 +158,14 @@ type OrderRecord = {
   services: { label: string; detail: string; total: number }[]
   customRequests: string[]
   total: number
+  status: string
 }
 type ServiceCatalog = { farmTiers: ServiceTier[]; farmOptions: ServiceOption[]; transportTiers: ServiceTier[]; transportOptions: ServiceOption[] }
 type SortMode = 'defaut' | 'prix-asc' | 'prix-desc' | 'nom'
 type AdminTab = 'catalogue' | 'services' | 'promos' | 'commandes'
 
 // Le mot de passe admin unique est vérifié côté serveur (route /api/admin/login,
-// variable d'environnement ADMIN_PASSWORD) — il n'apparaît jamais dans le code
+// variable d'environnement ADMIN_ACCESS_CODE) — il n'apparaît jamais dans le code
 // envoyé au navigateur des visiteurs.
 
 const DEFAULT_SERVICES: ServiceCatalog = {
@@ -200,6 +201,7 @@ export default function Page() {
   const [serviceCart, setServiceCart] = useState<ServiceLine[]>([])
   const [customRequests, setCustomRequests] = useState<CustomRequest[]>([])
   const [customText, setCustomText] = useState('')
+  const [customBudget, setCustomBudget] = useState('')
   const [promos, setPromos] = useState<Promo[]>(initialPromos)
   const [services, setServices] = useState<ServiceCatalog>(DEFAULT_SERVICES)
   const [orders, setOrders] = useState<OrderRecord[]>([])
@@ -216,8 +218,10 @@ export default function Page() {
   const [authError, setAuthError] = useState('')
   const adminAuth = adminPassword !== null
 
-  useEffect(() => { fetch('/data/catalogue.json').then(r => r.json()).then(data => Array.isArray(data) && setItems(data)).catch(() => {}) }, [])
-  useEffect(() => { const saved = sessionStorage.getItem('tfpc-admin-pw'); if (saved) setAdminPassword(saved) }, [])
+  useEffect(() => {
+    fetch('/api/catalogue').then(r => r.json()).then(data => Array.isArray(data.items) && setItems(data.items)).catch(() => {})
+    fetch('/api/admin/login').then(r => r.json()).then(data => { if (data.ok) setAdminPassword('session') }).catch(() => {})
+  }, [])
 
   // Les prix des services viennent des constantes par défaut, écrasées par les
   // surcharges enregistrées en base (modifiées depuis l'admin). Visible par tout le monde.
@@ -240,18 +244,17 @@ export default function Page() {
     const form = new FormData(event.currentTarget)
     const password = String(form.get('password') || '')
     try {
-      const res = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) })
+      const res = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: password }) })
       if (!res.ok) { setAuthError('Mot de passe incorrect.'); return }
     } catch { setAuthError('Connexion au serveur impossible. Réessaie.'); return }
-    sessionStorage.setItem('tfpc-admin-pw', password)
-    setAdminPassword(password); setAuthOpen(false); setView('admin')
+    setAdminPassword('session'); setAuthOpen(false); setView('admin')
   }
-  const logoutAdmin = () => { sessionStorage.removeItem('tfpc-admin-pw'); setAdminPassword(null); setView('home') }
+  const logoutAdmin = async () => { await fetch('/api/admin/login', { method: 'DELETE' }).catch(() => {}); setAdminPassword(null); setView('home') }
 
   // Charge les commandes depuis la base dès que l'admin est connecté.
   useEffect(() => {
     if (!adminPassword) return
-    fetch('/api/orders', { headers: { 'x-admin-password': adminPassword } })
+    fetch('/api/orders')
       .then(r => r.ok ? r.json() : Promise.reject())
       .then(data => setOrders(data.orders || []))
       .catch(() => setNotice("Impossible de charger les commandes depuis la base."))
@@ -306,9 +309,11 @@ export default function Page() {
 
   const addCustomRequest = () => {
     if (!customText.trim()) return
-    setCustomRequests(current => [...current, { id: Date.now(), text: customText.trim() }])
+    const budget = customBudget.trim() ? `Budget indicatif : ${customBudget.trim()} $` : 'Budget : non précisé'
+    setCustomRequests(current => [...current, { id: Date.now(), text: `${customText.trim()} — ${budget}` }])
     setCustomText('')
-    setNotice('Demande sur mesure ajoutée au panier')
+    setCustomBudget('')
+    setNotice('Demande sur mesure ajoutée au panier — Prix sur devis')
   }
   const removeCustomRequest = (id: number) => setCustomRequests(current => current.filter(request => request.id !== id))
 
@@ -320,10 +325,9 @@ export default function Page() {
     const note = String(form.get('note') || '')
     const payload = {
       player, contact, note,
-      items: cart.map(line => ({ label: line.item.Objet, detail: `${line.quantity} ${line.mode === 'unit' ? 'unité(s)' : 'stack(s)'}`, total: lineUnitPrice(line.item, line.mode) * line.quantity })),
-      services: serviceCart.map(line => ({ label: line.label, detail: `${line.quantity} ×`, total: line.price * line.quantity })),
+      items: cart.map(line => ({ name: line.item.Objet, mode: line.mode, quantity: line.quantity })),
+      services: serviceCart.map(line => ({ id: line.id, label: line.label, quantity: line.quantity })),
       customRequests: customRequests.map(request => request.text),
-      total,
     }
     try {
       const res = await fetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
@@ -339,10 +343,15 @@ export default function Page() {
     if (!adminPassword) return
     setOrders(current => current.filter(order => order.id !== id))
     try {
-      await fetch(`/api/orders/${id}`, { method: 'DELETE', headers: { 'x-admin-password': adminPassword } })
+      await fetch(`/api/orders/${id}`, { method: 'DELETE' })
     } catch { setNotice("La suppression n'a pas été enregistrée côté serveur.") }
   }
 
+  const updateOrderStatus = async (id: number, status: string) => {
+    setOrders(current => current.map(order => order.id === id ? { ...order, status } : order))
+    const res = await fetch(`/api/orders/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) })
+    if (!res.ok) setNotice('Le statut n’a pas pu être enregistré.')
+  }
   const cartCount = cart.reduce((sum, line) => sum + line.quantity, 0) + serviceCart.reduce((sum, line) => sum + line.quantity, 0) + customRequests.length
   const catalogueItemsToShow = view === 'home' ? filtered.slice(0, 6) : filtered
 
@@ -363,7 +372,7 @@ export default function Page() {
       items={items} setItems={setItems}
       promos={promos} setPromos={setPromos}
       services={services} setServices={setServices}
-      orders={orders} deleteOrder={deleteOrder}
+      orders={orders} deleteOrder={deleteOrder} updateOrderStatus={updateOrderStatus}
       tab={adminTab} setTab={setAdminTab}
       newPromo={newPromo} setNewPromo={setNewPromo}
       onBack={() => setView('home')}
@@ -448,6 +457,8 @@ export default function Page() {
           <h3>Divers — demande sur mesure</h3>
           <p>Tu ne trouves pas ce que tu cherches ? Décris ton besoin, on revient vers toi avec un devis.</p>
           <textarea value={customText} onChange={e => setCustomText(e.target.value)} placeholder="Ex : construction complète d'une base, ferme spécifique, gros transport, projet redstone…" />
+          <input value={customBudget} onChange={e => setCustomBudget(e.target.value)} inputMode="decimal" placeholder="Budget indicatif (optionnel)" />
+          <p className="range-note">Prix sur devis — aucun montant fixe ne sera facturé automatiquement.</p>
           <button className="primary" onClick={addCustomRequest}>Ajouter la demande au panier</button>
         </div>
       </section>}
@@ -508,11 +519,11 @@ export default function Page() {
   </div>
 }
 
-function Admin({ items, setItems, promos, setPromos, services, setServices, orders, deleteOrder, tab, setTab, newPromo, setNewPromo, onBack, onLogout, adminPassword }: {
+function Admin({ items, setItems, promos, setPromos, services, setServices, orders, deleteOrder, updateOrderStatus, tab, setTab, newPromo, setNewPromo, onBack, onLogout, adminPassword }: {
   items: Item[]; setItems: React.Dispatch<React.SetStateAction<Item[]>>
   promos: Promo[]; setPromos: React.Dispatch<React.SetStateAction<Promo[]>>
   services: ServiceCatalog; setServices: React.Dispatch<React.SetStateAction<ServiceCatalog>>
-  orders: OrderRecord[]; deleteOrder: (id: number) => void
+  orders: OrderRecord[]; deleteOrder: (id: number) => void; updateOrderStatus: (id: number, status: string) => void
   tab: AdminTab; setTab: (tab: AdminTab) => void
   newPromo: { title: string; detail: string }; setNewPromo: React.Dispatch<React.SetStateAction<{ title: string; detail: string }>>
   onBack: () => void; onLogout: () => void
@@ -522,11 +533,19 @@ function Admin({ items, setItems, promos, setPromos, services, setServices, orde
   const [adminSearch, setAdminSearch] = useState('')
   const [savingPrice, setSavingPrice] = useState<string | null>(null)
   const filteredAdminItems = useMemo(() => items.filter(item => `${item.Objet} ${item.Catégorie}`.toLowerCase().includes(adminSearch.toLowerCase())), [items, adminSearch])
-  const saveItem = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!editing) return; setItems(current => current.some(item => item.Objet === editing.Objet) ? current.map(item => item.Objet === editing.Objet ? editing : item) : [editing, ...current]); setEditing(null) }
+  const saveItem = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); if (!editing) return
+    const res = await fetch('/api/catalogue', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: editing }) })
+    if (!res.ok) return
+    const data = await res.json()
+    const saved = data.item || editing
+    setItems(current => current.some(item => item.Objet === saved.Objet) ? current.map(item => item.Objet === saved.Objet ? saved : item) : [saved, ...current])
+    setEditing(null)
+  }
   const persistPrice = async (id: string, price: number) => {
     setSavingPrice(id)
     try {
-      await fetch('/api/services', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-admin-password': adminPassword }, body: JSON.stringify({ updates: { [id]: price } }) })
+      await fetch('/api/services', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ updates: { [id]: price } }) })
     } finally {
       setSavingPrice(null)
     }
@@ -549,7 +568,7 @@ function Admin({ items, setItems, promos, setPromos, services, setServices, orde
     {tab === 'catalogue' && <section className="admin-panel">
       <div className="panel-head"><div><h2>Catalogue</h2><p>{filteredAdminItems.length} / {items.length} objets affichés</p></div><button className="primary" onClick={() => setEditing({ Objet: '', Catégorie: 'Agriculture', 'Prix / stack de 64 ($)': 0, 'Justification économique': '' })}>Ajouter un objet</button></div>
       <input className="admin-search" placeholder="Filtrer le catalogue par nom ou catégorie…" value={adminSearch} onChange={e => setAdminSearch(e.target.value)} />
-      <div className="admin-list">{filteredAdminItems.map(item => <div className="admin-row" key={item.Objet}><div><b>{item.Objet}</b><span>{item.Catégorie} · {money(Number(item['Prix / stack de 64 ($)']) || 0)}</span></div><button onClick={() => setEditing({ ...item })}>Modifier</button></div>)}</div>
+      <div className="admin-list">{filteredAdminItems.map(item => <div className="admin-row" key={item.Objet}><div><b>{item.Objet}</b><span>{item.Catégorie} · {money(Number(item['Prix / stack de 64 ($)']) || 0)}</span></div><div><button onClick={() => setEditing({ ...item })}>Modifier</button><button className="danger" onClick={async () => { if (!confirm(`Supprimer ${item.Objet} ?`)) return; const res = await fetch('/api/catalogue', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Objet: item.Objet }) }); if (res.ok) setItems(current => current.filter(x => x.Objet !== item.Objet)) }}>Supprimer</button></div></div>)}</div>
     </section>}
 
     {tab === 'services' && <section className="admin-panel">
@@ -574,7 +593,7 @@ function Admin({ items, setItems, promos, setPromos, services, setServices, orde
       <div className="panel-head"><div><h2>Commandes reçues</h2><p>{orders.length} commande(s) enregistrée(s) sur cet appareil.</p></div></div>
       <p className="admin-note">⚠️ Ce site est statique (pas de serveur ni de base de données) : cette liste n'affiche que les commandes passées depuis <b>ce même navigateur</b>. Pour recevoir les commandes de tous tes clients en un seul endroit, il faudra brancher une vraie base de données côté serveur.</p>
       {orders.length === 0 ? <p className="empty">Aucune commande pour l'instant.</p> : <div className="order-list">{orders.map(order => <article className="order-card" key={order.id}>
-        <div className="order-head"><div><b>{order.player}</b><span>{order.date}</span></div><strong>{money(order.total)}</strong></div>
+        <div className="order-head"><div><b>{order.player}</b><span>{order.date}</span></div><div><strong>{money(order.total)}</strong><select value={order.status || 'Nouvelle'} onChange={e => updateOrderStatus(order.id, e.target.value)} aria-label="Statut de la commande">{['Nouvelle','En cours','Devis à préparer','Acceptée','Terminée','Annulée'].map(status => <option key={status}>{status}</option>)}</select></div></div>
         {order.contact && <p className="order-contact">Contact : {order.contact}</p>}
         {order.note && <p className="order-note">Note : {order.note}</p>}
         {(order.items.length > 0 || order.services.length > 0) && <ul className="order-lines">
