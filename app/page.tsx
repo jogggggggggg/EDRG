@@ -341,6 +341,21 @@ export default function Page() {
     return list
   }, [items, query, sortMode])
 
+  // Certains objets ne doivent pas être vendus par stack : armures, outils et objets rares.
+  // Pour eux, le client choisit toujours une unité individuelle.
+  const isSinglePurchase = (item: Item) => {
+    const name = normalize(item.Objet)
+    const category = normalize(item.Catégorie || '')
+    const rarity = normalize(item['Rareté estimée'] || '')
+
+    return (
+      /armure|epee|arc|arbalete|casque|plastron|jambiere|bottes|bouclier|pioche|hache|pelle|houe|cisaille|briquet|canne a peche/.test(name) ||
+      /equipements|outils/.test(category) ||
+      /raretes|drops.*objets rares/.test(category) ||
+      /unique|tres rare|tres rares|mythique|mythiques|legendaire|legendaires/.test(rarity)
+    )
+  }
+
   const lineUnitPrice = (item: Item, mode: 'unit' | 'stack') => mode === 'unit' ? (Number(item['Prix / unité ($)']) || (Number(item['Prix / stack de 64 ($)']) || 0) / 64) : (Number(item['Prix / stack de 64 ($)']) || (Number(item['Prix / unité ($)']) || 0) * 64)
   const catalogueTotal = cart.reduce((sum, line) => sum + lineUnitPrice(line.item, line.mode) * line.quantity, 0)
   const serviceTotal = serviceCart.reduce((sum, line) => sum + line.price * line.quantity, 0)
@@ -350,21 +365,29 @@ export default function Page() {
   const lineKey = (name: string, mode: 'unit' | 'stack') => `${name}::${mode}`
 
   const add = (item: Item, qty: number = 1, mode: 'unit' | 'stack' = 'stack') => {
+    const purchaseMode = isSinglePurchase(item) ? 'unit' : mode
     const amount = Math.max(1, qty)
     setCart(lines => {
-      const existing = lines.find(line => line.item.Objet === item.Objet && line.mode === mode)
-      return existing ? lines.map(line => line === existing ? { ...line, quantity: line.quantity + amount } : line) : [...lines, { item, quantity: amount, mode }]
+      const existing = lines.find(line => line.item.Objet === item.Objet && line.mode === purchaseMode)
+      return existing ? lines.map(line => line === existing ? { ...line, quantity: line.quantity + amount } : line) : [...lines, { item, quantity: amount, mode: purchaseMode }]
     })
-    setNotice(`${item.Objet} ajouté au panier (${amount} ${mode === 'unit' ? 'unité(s)' : 'stack(s)'})`)
+    setNotice(`${item.Objet} ajouté au panier (${amount} ${purchaseMode === 'unit' ? 'unité(s)' : 'stack(s)'})`)
   }
   const remove = (name: string, mode: 'unit' | 'stack') => setCart(lines => lines.filter(line => !(line.item.Objet === name && line.mode === mode)))
   const setQuantity = (name: string, mode: 'unit' | 'stack', qty: number) => setCart(lines => qty <= 0 ? lines.filter(line => !(line.item.Objet === name && line.mode === mode)) : lines.map(line => line.item.Objet === name && line.mode === mode ? { ...line, quantity: qty } : line))
   const [pickQty, setPickQty] = useState<Record<string, number>>({})
   const [pickMode, setPickMode] = useState<Record<string, 'unit' | 'stack'>>({})
   const qtyFor = (name: string) => pickQty[name] || 1
-  const modeFor = (name: string) => pickMode[name] || 'stack'
+  const modeFor = (name: string) => {
+    const item = items.find(current => current.Objet === name)
+    if (item && isSinglePurchase(item)) return 'unit'
+    return pickMode[name] || 'stack'
+  }
   const bumpQty = (name: string, delta: number) => setPickQty(current => ({ ...current, [name]: Math.max(1, (current[name] || 1) + delta) }))
-  const setModeFor = (name: string, mode: 'unit' | 'stack') => setPickMode(current => ({ ...current, [name]: mode }))
+  const setModeFor = (name: string, mode: 'unit' | 'stack') => {
+    const item = items.find(current => current.Objet === name)
+    setPickMode(current => ({ ...current, [name]: item && isSinglePurchase(item) ? 'unit' : mode }))
+  }
 
   const addService = (label: string, price: number, group: 'Ferme' | 'Transport', id: string, qty: number = 1) => {
     setServiceCart(lines => {
@@ -485,7 +508,7 @@ export default function Page() {
             <div className="product-footer">
               <strong>{money(lineUnitPrice(item, modeFor(item.Objet)) * qtyFor(item.Objet))}</strong>
               <div className="buy-controls">
-                <div className="mode-picker"><button type="button" className={modeFor(item.Objet) === 'unit' ? 'selected' : ''} onClick={() => setModeFor(item.Objet, 'unit')}>Unité</button><button type="button" className={modeFor(item.Objet) === 'stack' ? 'selected' : ''} onClick={() => setModeFor(item.Objet, 'stack')}>Stack 64</button></div>
+                <div className="mode-picker"><button type="button" className={modeFor(item.Objet) === 'unit' ? 'selected' : ''} onClick={() => setModeFor(item.Objet, 'unit')}>Unité</button>{!isSinglePurchase(item) && <button type="button" className={modeFor(item.Objet) === 'stack' ? 'selected' : ''} onClick={() => setModeFor(item.Objet, 'stack')}>Stack 64</button>}</div>
                 <div className="qty-picker"><button type="button" aria-label="Diminuer la quantité" onClick={() => bumpQty(item.Objet, -1)}>−</button><span>{qtyFor(item.Objet)}</span><button type="button" aria-label="Augmenter la quantité" onClick={() => bumpQty(item.Objet, 1)}>+</button></div>
                 <button onClick={() => add(item, qtyFor(item.Objet), modeFor(item.Objet))}>Ajouter</button>
               </div>
