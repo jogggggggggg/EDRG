@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import catalogueSeed from '@/public/data/catalogue.json'
 
 type Item = { Objet: string; Catégorie: string; 'Prix / stack de 64 ($)'?: number; 'Prix / unité ($)'?: number; 'Rareté estimée'?: string; 'Justification économique'?: string; Disponibilité?: string; Image?: string }
 type CartLine = { item: Item; quantity: number; mode: 'unit' | 'stack' }
@@ -196,7 +197,12 @@ const DEFAULT_SERVICES: ServiceCatalog = {
 }
 
 export default function Page() {
-  const [items, setItems] = useState<Item[]>(fallbackItems)
+  // On part directement du catalogue complet embarqué dans le build (491 objets), au lieu
+  // d'un mini-échantillon de secours : la page affiche donc tout, même si l'appel réseau
+  // vers /api/catalogue échoue (base de données indisponible, erreur serveur, etc.).
+  const [items, setItems] = useState<Item[]>(
+    Array.isArray(catalogueSeed) && catalogueSeed.length > 0 ? (catalogueSeed as Item[]) : fallbackItems
+  )
   const [cart, setCart] = useState<CartLine[]>([])
   const [serviceCart, setServiceCart] = useState<ServiceLine[]>([])
   const [customRequests, setCustomRequests] = useState<CustomRequest[]>([])
@@ -219,7 +225,20 @@ export default function Page() {
   const adminAuth = adminPassword !== null
 
   useEffect(() => {
-    fetch('/api/catalogue').then(r => r.json()).then(data => Array.isArray(data.items) && setItems(data.items)).catch(() => {})
+    fetch('/api/catalogue')
+      .then(r => {
+        if (!r.ok) throw new Error(`Réponse ${r.status} de /api/catalogue`)
+        return r.json()
+      })
+      .then(data => {
+        if (Array.isArray(data.items) && data.items.length > 0) setItems(data.items)
+      })
+      .catch(err => {
+        // On garde le catalogue embarqué (déjà affiché) et on prévient discrètement
+        // au lieu de rester bloqué en silence sur un état incomplet.
+        console.error('Chargement du catalogue depuis la base impossible :', err)
+        setNotice("Catalogue chargé en mode secours (la base de données n'a pas répondu).")
+      })
     fetch('/api/admin/login').then(r => r.json()).then(data => { if (data.ok) setAdminPassword('session') }).catch(() => {})
   }, [])
 
@@ -245,7 +264,13 @@ export default function Page() {
     const password = String(form.get('password') || '')
     try {
       const res = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: password }) })
-      if (!res.ok) { setAuthError('Mot de passe incorrect.'); return }
+      if (!res.ok) {
+        const data = await res.json().catch(() => null)
+        setAuthError(data?.message || (data?.error === 'not_configured'
+          ? "Aucun mot de passe admin n'est configuré sur le serveur."
+          : 'Mot de passe incorrect.'))
+        return
+      }
     } catch { setAuthError('Connexion au serveur impossible. Réessaie.'); return }
     setAdminPassword('session'); setAuthOpen(false); setView('admin')
   }
