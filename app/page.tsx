@@ -286,8 +286,55 @@ export default function Page() {
   }, [adminPassword])
 
   const priceBase = (item: Item) => Number(item['Prix / stack de 64 ($)']) || (Number(item['Prix / unité ($)']) || 0) * 64
+
+  // Classe les résultats de recherche par pertinence : une correspondance
+  // exacte/proche du début du nom passe avant une correspondance plus éloignée.
+  const searchDistance = (needle: string, haystack: string) => {
+    if (!needle) return 0
+    if (haystack === needle) return 0
+    if (haystack.startsWith(needle)) return 1
+    const index = haystack.indexOf(needle)
+    if (index >= 0) return 10 + index
+
+    const max = Math.max(needle.length, haystack.length)
+    const previous = Array.from({ length: haystack.length + 1 }, (_, i) => i)
+    for (let i = 1; i <= needle.length; i++) {
+      const current = [i]
+      for (let j = 1; j <= haystack.length; j++) {
+        current[j] = Math.min(
+          current[j - 1] + 1,
+          previous[j] + 1,
+          previous[j - 1] + (needle[i - 1] === haystack[j - 1] ? 0 : 1),
+        )
+      }
+      for (let j = 0; j <= haystack.length; j++) previous[j] = current[j]
+    }
+    return 20 + previous[haystack.length] / Math.max(1, max) * 100
+  }
+
+  const searchScore = (item: Item, rawQuery: string) => {
+    const q = normalize(rawQuery).trim()
+    if (!q) return 0
+    const name = normalize(item.Objet)
+    const category = normalize(item.Catégorie || '')
+    const nameScore = searchDistance(q, name)
+    const categoryScore = searchDistance(q, category) + 30
+    const words = name.split(/\s+/).filter(Boolean)
+    const wordScore = words.length ? Math.min(...words.map(word => searchDistance(q, word))) + 5 : Infinity
+    return Math.min(nameScore, categoryScore, wordScore)
+  }
+
   const filtered = useMemo(() => {
-    const list = items.filter(item => `${item.Objet} ${item.Catégorie}`.toLowerCase().includes(query.toLowerCase()))
+    const normalizedQuery = normalize(query).trim()
+    if (normalizedQuery) {
+      return items
+        .map((item, index) => ({ item, index, score: searchScore(item, normalizedQuery) }))
+        .filter(({ score }) => score < 120)
+        .sort((a, b) => a.score - b.score || a.index - b.index)
+        .map(({ item }) => item)
+    }
+
+    const list = items
     if (sortMode === 'prix-asc') return [...list].sort((a, b) => priceBase(a) - priceBase(b))
     if (sortMode === 'prix-desc') return [...list].sort((a, b) => priceBase(b) - priceBase(a))
     if (sortMode === 'nom') return [...list].sort((a, b) => a.Objet.localeCompare(b.Objet, 'fr'))
